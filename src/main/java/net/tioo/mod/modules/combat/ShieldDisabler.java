@@ -93,7 +93,7 @@ public class ShieldDisabler extends Module {
 
         // Attack target
         mc.interactionManager.attackEntity(mc.player, target);
-        mc.player.swingMainHand();
+        mc.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
 
         // Update state
         switched      = true;

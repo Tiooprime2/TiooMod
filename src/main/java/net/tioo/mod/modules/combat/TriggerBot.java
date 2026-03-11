@@ -89,7 +89,7 @@ public class TriggerBot extends Module {
         // ═══════════════════════════════════════════
         mc.interactionManager.attackEntity(mc.player, target);
         if (swingHand) {
-            mc.player.swingMainHand();
+            mc.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
         }
 
         // Update timing
