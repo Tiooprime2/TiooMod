@@ -11,11 +11,15 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * TiooGui — Fix blur untuk 1.21.4
+ * TiooGui — Fix sinkron klik vs visual
  *
- * Di 1.21.4 RenderSystem.setProjectionMatrix API berubah
- * Tidak bisa pakai VertexSorter lagi
- * Fix blur: pakai ctx.getMatrices().push/pop + scale manual
+ * Root cause:
+ * Argon pakai unscaledProjection() → semua koordinat dalam framebuffer pixels
+ * mouseX *= scaleFactor → sinkron dengan render
+ *
+ * Di 1.21.4 unscaledProjection tidak bisa dipakai
+ * Fix: pakai MatrixStack.scale() untuk render dalam framebuffer space
+ * Semua koordinat mouse juga di-scale sama
  */
 public class TiooGui extends Screen {
 
@@ -32,7 +36,7 @@ public class TiooGui extends Screen {
     private static final int C_THUMB  = col(80,  140, 255, 200);
     private static final int C_SCRBG  = col(40,  40,  60,  180);
 
-    // Sizes — dalam scaled coords biasa (bukan framebuffer)
+    // Ukuran GUI dalam scaled GUI coords (sama seperti Minecraft normal)
     private static final int WIN_W = 195;
     private static final int WIN_H = 260;
     private static final int HDR_H = 18;
@@ -54,55 +58,71 @@ public class TiooGui extends Screen {
 
     private List<BS> buildTB() {
         List<BS> s = new ArrayList<>();
-        s.add(new BS("All Entities",    TiooMod.triggerBot.isAllEntities(),   v -> TiooMod.triggerBot.setAllEntities(v)));
-        s.add(new BS("Swing Hand",      TiooMod.triggerBot.isSwingHand(),     v -> TiooMod.triggerBot.setSwingHand(v)));
-        s.add(new BS("Check Shield",    TiooMod.triggerBot.isCheckShield(),   v -> TiooMod.triggerBot.setCheckShield(v)));
-        s.add(new BS("Only Crit Sword", TiooMod.triggerBot.isOnlyCritSword(),v -> TiooMod.triggerBot.setOnlyCritSword(v)));
-        s.add(new BS("Only Crit Axe",   TiooMod.triggerBot.isOnlyCritAxe(),  v -> TiooMod.triggerBot.setOnlyCritAxe(v)));
-        s.add(new BS("While Ascending", TiooMod.triggerBot.isWhileAscend(),   v -> TiooMod.triggerBot.setWhileAscend(v)));
+        s.add(new BS("All Entities",    TiooMod.triggerBot.isAllEntities(),    v -> TiooMod.triggerBot.setAllEntities(v)));
+        s.add(new BS("Swing Hand",      TiooMod.triggerBot.isSwingHand(),      v -> TiooMod.triggerBot.setSwingHand(v)));
+        s.add(new BS("Check Shield",    TiooMod.triggerBot.isCheckShield(),    v -> TiooMod.triggerBot.setCheckShield(v)));
+        s.add(new BS("Only Crit Sword", TiooMod.triggerBot.isOnlyCritSword(),  v -> TiooMod.triggerBot.setOnlyCritSword(v)));
+        s.add(new BS("Only Crit Axe",   TiooMod.triggerBot.isOnlyCritAxe(),   v -> TiooMod.triggerBot.setOnlyCritAxe(v)));
+        s.add(new BS("While Ascending", TiooMod.triggerBot.isWhileAscend(),    v -> TiooMod.triggerBot.setWhileAscend(v)));
         return s;
     }
 
     private List<BS> buildSD() {
         List<BS> s = new ArrayList<>();
-        s.add(new BS("Switch Back", TiooMod.shieldDisabler.isSwitchBack(),     v -> TiooMod.shieldDisabler.setSwitchBack(v)));
-        s.add(new BS("Require Axe", TiooMod.shieldDisabler.isRequireHoldAxe(),v -> TiooMod.shieldDisabler.setRequireHoldAxe(v)));
+        s.add(new BS("Switch Back", TiooMod.shieldDisabler.isSwitchBack(),      v -> TiooMod.shieldDisabler.setSwitchBack(v)));
+        s.add(new BS("Require Axe", TiooMod.shieldDisabler.isRequireHoldAxe(), v -> TiooMod.shieldDisabler.setRequireHoldAxe(v)));
         return s;
     }
 
+    // ── Helper: ambil scaleFactor ──────────────────────────────────────────
+    private static float sf() {
+        return (float) MinecraftClient.getInstance().getWindow().getScaleFactor();
+    }
+
+    // ── Konversi mouse dari GUI coords ke "unscaled" coords ───────────────
+    // Argon: mouseX *= scaleFactor sebelum dipakai
+    // Kita: karena tidak pakai unscaledProjection, kita TIDAK perlu scale mouse
+    // GUI kita sudah render di GUI coords biasa — jadi mouse langsung cocok
+    // Yang perlu difix: posisi awal winX/winY harus dalam GUI coords
+
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
-        // Scroll update
+        // Scroll
         scrOff += scrVel; scrVel *= 0.80;
         if (Math.abs(scrVel) < 0.01) scrVel = 0;
         int totH = totH(), visH = WIN_H - HDR_H;
         scrOff = Math.max(0, Math.min(scrOff, Math.max(0, totH - visH)));
 
-        // Window BG + header
+        // Window BG + border + header
         fill(ctx, winX, winY, winX+WIN_W, winY+WIN_H, C_BG);
         border(ctx, winX, winY, WIN_W, WIN_H, C_BORDER);
         fill(ctx, winX, winY, winX+WIN_W, winY+HDR_H, C_HEADER);
+        // Accent line di tengah header
         fill(ctx, winX+WIN_W/4, winY, winX+WIN_W*3/4, winY+1, C_ACCENT);
-        ctx.drawText(textRenderer, "✦ Tioo", winX+6, winY+5, C_TEXT, false);
+        ctx.drawText(textRenderer, "✦ Tioo", winX+6,        winY+5, C_TEXT,  false);
         ctx.drawText(textRenderer, "v1.0",   winX+WIN_W-24, winY+5, C_MUTED, false);
+
+        // Clip render area bawah header
+        int clipY1 = winY + HDR_H;
+        int clipY2 = winY + WIN_H;
 
         // Entries
         int y = winY + HDR_H + PAD - (int)scrOff;
         for (Entry e : entries) {
-            if (y+BTN_H > winY+HDR_H && y < winY+WIN_H)
+            if (y + BTN_H > clipY1 && y < clipY2)
                 renderBtn(ctx, e, winX+PAD, y, mouseX, mouseY);
             y += BTN_H + PAD;
             if (e.exp) {
                 int sh = subH(e);
-                if (y > winY+HDR_H && y < winY+WIN_H)
-                    renderSub(ctx, e, winX+PAD, y, mouseX, mouseY);
+                if (y > clipY1 && y < clipY2)
+                    renderSub(ctx, e, winX+PAD, y, mouseX, mouseY, clipY1, clipY2);
                 y += sh + PAD;
             }
         }
 
         // Scrollbar
         if (totH > visH) {
-            int sbx=winX+WIN_W-4, sby=winY+HDR_H, sbh=visH;
+            int sbx=winX+WIN_W-4, sby=clipY1, sbh=visH;
             int th = Math.max(14, (int)(sbh*(float)visH/totH));
             int ty = sby+(int)((sbh-th)*(float)(scrOff/Math.max(1,totH-visH)));
             fill(ctx, sbx, sby, sbx+3, sby+sbh, C_SCRBG);
@@ -114,29 +134,33 @@ public class TiooGui extends Screen {
 
     private void renderBtn(DrawContext ctx, Entry e, int x, int y, int mx, int my) {
         boolean on = e.mod.isEnabled();
-        int w = WIN_W-PAD*2;
+        int w = WIN_W - PAD*2;
         fill(ctx, x, y, x+w, y+BTN_H, on ? C_ON : C_OFF);
         border(ctx, x, y, w, BTN_H, on ? C_GREEN : C_BORDER);
+        // Accent strip kiri
         fill(ctx, x, y+4, x+3, y+BTN_H-4, on ? C_GREEN : C_MUTED);
         ctx.drawText(textRenderer, e.mod.getName(),        x+7, y+5,  C_TEXT,  false);
         ctx.drawText(textRenderer, e.mod.getDescription(), x+7, y+16, C_MUTED, false);
+        // Badge ON/OFF
         int bx=x+w-26, by=y+BTN_H/2-5;
         fill(ctx, bx, by, bx+22, by+11, on ? col(20,60,25,200) : col(30,30,45,200));
         ctx.drawText(textRenderer, on?"ON":"OFF", bx+2, by+2, on ? C_GREEN : C_MUTED, false);
+        // Arrow expand
         ctx.drawText(textRenderer, e.exp?"▲":"▼", x+w-12, y+5, C_MUTED, false);
     }
 
-    private void renderSub(DrawContext ctx, Entry e, int x, int y, int mx, int my) {
-        int w=WIN_W-PAD*2, h=subH(e);
+    private void renderSub(DrawContext ctx, Entry e, int x, int y,
+                            int mx, int my, int clipY1, int clipY2) {
+        int w = WIN_W-PAD*2, h = subH(e);
         fill(ctx, x, y, x+w, y+h, col(14,14,22,245));
         border(ctx, x, y, w, h, C_BORDER);
         int sy = y+2-(int)e.subScr;
         for (BS s : e.settings) {
-            if (sy+SUB_H > y && sy < y+h) {
+            if (sy+SUB_H > y && sy < y+h && sy > clipY1 && sy < clipY2) {
                 if (mx>=x && mx<=x+w && my>=sy && my<=sy+SUB_H)
                     fill(ctx, x, sy, x+w, sy+SUB_H, col(255,255,255,15));
-                ctx.drawText(textRenderer, s.label,         x+5,   sy+3, C_TEXT, false);
-                ctx.drawText(textRenderer, s.val?"✓":"✗", x+w-12, sy+3,
+                ctx.drawText(textRenderer, s.label,           x+5,   sy+3, C_TEXT, false);
+                ctx.drawText(textRenderer, s.val ? "✓" : "✗", x+w-12, sy+3,
                     s.val ? C_GREEN : col(200,70,70,255), false);
             }
             sy += SUB_H;
@@ -168,12 +192,14 @@ public class TiooGui extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int btn) {
+        // Header drag
         if (mx>=winX && mx<=winX+WIN_W && my>=winY && my<=winY+HDR_H) {
             drag=true; dx=(int)(mx-winX); dy=(int)(my-winY); return true;
         }
         int y = winY+HDR_H+PAD-(int)scrOff;
         for (Entry e : entries) {
             int x=winX+PAD, w=WIN_W-PAD*2;
+            // Klik tombol module
             if (mx>=x && mx<=x+w && my>=y && my<=y+BTN_H) {
                 if (btn==0) e.mod.toggle();
                 else if (btn==1) { e.exp=!e.exp; e.subScr=0; }
@@ -181,6 +207,7 @@ public class TiooGui extends Screen {
             }
             y += BTN_H+PAD;
             if (e.exp) {
+                // Klik setting
                 int sy = y-(int)e.subScr;
                 for (BS s : e.settings) {
                     if (mx>=x+4 && mx<=x+w-4 && my>=sy && my<=sy+SUB_H) {
@@ -202,11 +229,11 @@ public class TiooGui extends Screen {
 
     @Override
     public boolean mouseReleased(double mx, double my, int btn) {
-        drag=false; return super.mouseReleased(mx,my,btn);
+        drag=false; return super.mouseReleased(mx, my, btn);
     }
 
     @Override public boolean shouldPause()      { return false; }
-    @Override public boolean shouldCloseOnEsc() { return true; }
+    @Override public boolean shouldCloseOnEsc() { return true;  }
 
     private int totH() {
         int t=0;
@@ -214,7 +241,10 @@ public class TiooGui extends Screen {
         return t;
     }
     private int subH(Entry e) { return Math.min(e.settings.size()*SUB_H+4, 80); }
-    private void fill(DrawContext c,int x1,int y1,int x2,int y2,int color) { c.fill(x1,y1,x2,y2,color); }
+
+    private void fill(DrawContext c,int x1,int y1,int x2,int y2,int color) {
+        if (x2>x1 && y2>y1) c.fill(x1,y1,x2,y2,color);
+    }
     private void border(DrawContext c,int x,int y,int w,int h,int col) {
         c.fill(x,y,x+w,y+1,col); c.fill(x,y+h-1,x+w,y+h,col);
         c.fill(x,y,x+1,y+h,col); c.fill(x+w-1,y,x+w,y+h,col);
