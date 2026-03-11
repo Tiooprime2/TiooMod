@@ -1,1 +1,21 @@
-
+{
+  "schemaVersion": 1,
+  "id": "tioomod",
+  "version": "1.0.0",
+  "name": "Tioo",
+  "description": "Lightweight combat mod by Tiooprime2",
+  "authors": ["Tiooprime2"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["net.tioo.mod.TiooMod"]
+  },
+  "mixins": ["tioo.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.4",
+    "java": ">=21"
+  }
+}
