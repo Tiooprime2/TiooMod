@@ -1,34 +1,44 @@
 package net.tioo.mod.modules.combat;
 
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.AxeItem;
+import net.minecraft.item.SwordItem;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.tioo.mod.modules.Module;
 
 /**
- * TriggerBot — rewritten from Argon's TriggerBot.class
+ * TriggerBot — rewritten based on Argon source
  *
- * Logic:
- * 1. Raycast check: cek apakah crosshair mengarah ke LivingEntity
- * 2. Cooldown check: hanya swing saat attack strength = 100%
- * 3. Swing attack ke target
+ * Key logic dari Argon:
+ * - Sword delay: 540-550ms (random)
+ * - Axe delay: 780-800ms (random)
+ * - Only crit: cek fallDistance <= 0
+ * - Check shield: cek target.isBlocking()
+ * - Strict crosshairTarget only (bukan kill aura)
  */
 public class TriggerBot extends Module {
 
     // Settings
-    private boolean workInScreen  = false; // trigger meski di dalam screen
-    private boolean whileUse      = false; // trigger meski sedang makan/blocking
-    private boolean allEntities   = false; // attack semua entity, bukan hanya player
-    private boolean onlyOnGround  = false; // hanya attack saat di tanah/jatuh
-    private boolean swingHand     = true;  // swing hand saat attack
-    private int     minDelay      = 0;     // ms minimum delay antar attack
-    private int     maxDelay      = 0;     // ms maximum delay antar attack
+    private boolean whileAscend  = false; // attack saat naik jump
+    private boolean allEntities  = false; // attack semua entity
+    private boolean swingHand    = true;  // swing tangan
+    private boolean onlyCritSword = false; // hanya crit saat sword
+    private boolean onlyCritAxe  = false; // hanya crit saat axe
+    private boolean checkShield  = false; // skip kalau target blocking
+
+    // Delay — sama seperti Argon
+    private int swordMinDelay = 540;
+    private int swordMaxDelay = 550;
+    private int axeMinDelay   = 780;
+    private int axeMaxDelay   = 800;
 
     // State
-    private long    lastAttackTime = 0;
-    private long    currentDelay   = 0;
+    private long lastAttackTime   = 0;
+    private long currentDelay     = 545;
 
     public TriggerBot() {
         super("Trigger Bot", "Automatically hits players for you");
@@ -36,82 +46,81 @@ public class TriggerBot extends Module {
 
     public void onTick(MinecraftClient mc) {
         if (mc.player == null || mc.world == null) return;
+        if (mc.currentScreen != null) return;
 
-        // Skip kalau di dalam screen (kecuali workInScreen aktif)
-        if (mc.currentScreen != null && !workInScreen) return;
+        // While ascending check — sama kayak Argon
+        // Argon: skip kalau not on ground DAN velocity y > 0 DAN fallDistance <= 0
+        if (!whileAscend) {
+            boolean ascending = !mc.player.isOnGround()
+                && mc.player.getVelocity().y > 0;
+            boolean notFalling = !mc.player.isOnGround()
+                && mc.player.fallDistance <= 0.0f;
+            if (ascending || notFalling) return;
+        }
 
-        // Skip kalau sedang use item (kecuali whileUse aktif)
-        if (!whileUse && mc.player.isUsingItem()) return;
-
-        // ═══════════════════════════════════════════
-        // COOLDOWN CHECK — hanya swing kalau 100%
-        // ═══════════════════════════════════════════
-        float attackCooldown = mc.player.getAttackCooldownProgress(0f);
-        if (attackCooldown < 1.0f) return;
-
-        // ═══════════════════════════════════════════
-        // DELAY CHECK
-        // ═══════════════════════════════════════════
+        // Delay check
         long now = System.currentTimeMillis();
         if (now - lastAttackTime < currentDelay) return;
 
-        // ═══════════════════════════════════════════
-        // RAYCAST CHECK — crosshair ke LivingEntity?
-        // ═══════════════════════════════════════════
-        HitResult hit = mc.crosshairTarget;
-        if (hit == null) return;
-        if (hit.getType() != HitResult.Type.ENTITY) return;
+        // Strict crosshair check
+        if (!(mc.crosshairTarget instanceof EntityHitResult hit)) return;
+        if (mc.crosshairTarget.getType() != HitResult.Type.ENTITY) return;
 
-        EntityHitResult entityHit = (EntityHitResult) hit;
+        Entity entity = hit.getEntity();
+        if (entity == null) return;
+        if (entity == mc.player) return;
 
-        // Cek apakah entity valid
-        if (!(entityHit.getEntity() instanceof LivingEntity target)) return;
+        // Entity filter
+        if (!allEntities && !(entity instanceof PlayerEntity)) return;
 
-        // Skip player sendiri
-        if (target == mc.player) return;
-
-        // Kalau allEntities false, hanya attack PlayerEntity
-        if (!allEntities && !(target instanceof PlayerEntity)) return;
-
-        // Skip mob yang sudah mati
-        if (target.isDead() || target.getHealth() <= 0) return;
-
-        // ═══════════════════════════════════════════
-        // ONLY ON GROUND / FALLING CHECK
-        // ═══════════════════════════════════════════
-        if (onlyOnGround) {
-            // Skip kalau player sedang naik dari jump
-            if (mc.player.getVelocity().y > 0) return;
+        // Check shield — skip kalau target blocking
+        if (checkShield && entity instanceof PlayerEntity player) {
+            if (player.isBlocking()) return;
         }
 
-        // ═══════════════════════════════════════════
+        // Item check — beda delay sword vs axe
+        var item = mc.player.getMainHandStack().getItem();
+        boolean isSword = item instanceof SwordItem;
+        boolean isAxe   = item instanceof AxeItem;
+
+        // Only crit checks — sama kayak Argon (cek fallDistance)
+        if (onlyCritSword && isSword && mc.player.fallDistance <= 0.0f) return;
+        if (onlyCritAxe   && isAxe   && mc.player.fallDistance <= 0.0f) return;
+
+        // Attack cooldown check
+        float cooldown = mc.player.getAttackCooldownProgress(0f);
+        if (cooldown < 1.0f) return;
+
         // ATTACK!
-        // ═══════════════════════════════════════════
-        mc.interactionManager.attackEntity(mc.player, target);
+        mc.interactionManager.attackEntity(mc.player, entity);
         if (swingHand) {
-            mc.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
+            mc.player.swingHand(Hand.MAIN_HAND);
         }
 
-        // Update timing
+        // Update delay — random range tergantung item
         lastAttackTime = now;
-        // Random delay antara min dan max
-        currentDelay = minDelay + (long)(Math.random() * (maxDelay - minDelay + 1));
+        if (isAxe) {
+            currentDelay = axeMinDelay
+                + (long)(Math.random() * (axeMaxDelay - axeMinDelay + 1));
+        } else {
+            // Sword atau item lain pakai sword delay
+            currentDelay = swordMinDelay
+                + (long)(Math.random() * (swordMaxDelay - swordMinDelay + 1));
+        }
     }
 
-    // ─── Settings Getters/Setters ──────────────────────────────────────────
-    public boolean isWorkInScreen()  { return workInScreen; }
-    public boolean isWhileUse()      { return whileUse; }
+    // Getters/Setters
+    public boolean isWhileAscend()   { return whileAscend; }
     public boolean isAllEntities()   { return allEntities; }
-    public boolean isOnlyOnGround()  { return onlyOnGround; }
     public boolean isSwingHand()     { return swingHand; }
-    public int     getMinDelay()     { return minDelay; }
-    public int     getMaxDelay()     { return maxDelay; }
+    public boolean isOnlyCritSword() { return onlyCritSword; }
+    public boolean isOnlyCritAxe()   { return onlyCritAxe; }
+    public boolean isCheckShield()   { return checkShield; }
 
-    public void setWorkInScreen(boolean v)  { this.workInScreen  = v; }
-    public void setWhileUse(boolean v)      { this.whileUse      = v; }
+    public void setWhileAscend(boolean v)   { this.whileAscend   = v; }
     public void setAllEntities(boolean v)   { this.allEntities   = v; }
-    public void setOnlyOnGround(boolean v)  { this.onlyOnGround  = v; }
     public void setSwingHand(boolean v)     { this.swingHand     = v; }
-    public void setMinDelay(int v)          { this.minDelay       = v; }
-    public void setMaxDelay(int v)          { this.maxDelay       = v; }
+    public void setOnlyCritSword(boolean v) { this.onlyCritSword = v; }
+    public void setOnlyCritAxe(boolean v)   { this.onlyCritAxe   = v; }
+    public void setCheckShield(boolean v)   { this.checkShield   = v; }
 }
