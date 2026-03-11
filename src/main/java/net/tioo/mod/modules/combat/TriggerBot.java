@@ -10,35 +10,25 @@ import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.tioo.mod.modules.Module;
 
-/**
- * TriggerBot — rewritten based on Argon source
- *
- * Key logic dari Argon:
- * - Sword delay: 540-550ms (random)
- * - Axe delay: 780-800ms (random)
- * - Only crit: cek fallDistance <= 0
- * - Check shield: cek target.isBlocking()
- * - Strict crosshairTarget only (bukan kill aura)
- */
 public class TriggerBot extends Module {
 
     // Settings
-    private boolean whileAscend  = false; // attack saat naik jump
-    private boolean allEntities  = false; // attack semua entity
-    private boolean swingHand    = true;  // swing tangan
-    private boolean onlyCritSword = false; // hanya crit saat sword
-    private boolean onlyCritAxe  = false; // hanya crit saat axe
-    private boolean checkShield  = false; // skip kalau target blocking
+    private boolean whileAscend   = false;
+    private boolean allEntities   = false;
+    private boolean swingHand     = true;
+    private boolean onlyCritSword = false;
+    private boolean onlyCritAxe   = false;
+    private boolean checkShield   = false;
 
     // Delay — sama seperti Argon
-    private int swordMinDelay = 540;
-    private int swordMaxDelay = 550;
-    private int axeMinDelay   = 780;
-    private int axeMaxDelay   = 800;
+    private final int swordMinDelay = 540;
+    private final int swordMaxDelay = 550;
+    private final int axeMinDelay   = 780;
+    private final int axeMaxDelay   = 800;
 
     // State
-    private long lastAttackTime   = 0;
-    private long currentDelay     = 545;
+    private long lastAttackTime = 0;
+    private long currentDelay   = 545;
 
     public TriggerBot() {
         super("Trigger Bot", "Automatically hits players for you");
@@ -49,63 +39,55 @@ public class TriggerBot extends Module {
         if (mc.currentScreen != null) return;
 
         // While ascending check — sama kayak Argon
-        // Argon: skip kalau not on ground DAN velocity y > 0 DAN fallDistance <= 0
         if (!whileAscend) {
-            boolean ascending = !mc.player.isOnGround()
-                && mc.player.getVelocity().y > 0;
-            boolean notFalling = !mc.player.isOnGround()
-                && mc.player.fallDistance <= 0.0f;
+            boolean ascending = !mc.player.isOnGround() && mc.player.getVelocity().y > 0;
+            boolean notFalling = !mc.player.isOnGround() && mc.player.fallDistance <= 0.0f;
             if (ascending || notFalling) return;
         }
 
         // Delay check
-        long now = System.currentTimeMillis();
+        long now = System.nanoTime() / 1000000L; // pakai nanoTime seperti Argon TimerUtils
         if (now - lastAttackTime < currentDelay) return;
 
-        // Strict crosshair check
+        // Strict crosshair only
         if (!(mc.crosshairTarget instanceof EntityHitResult hit)) return;
         if (mc.crosshairTarget.getType() != HitResult.Type.ENTITY) return;
 
         Entity entity = hit.getEntity();
-        if (entity == null) return;
-        if (entity == mc.player) return;
+        if (entity == null || entity == mc.player) return;
 
         // Entity filter
         if (!allEntities && !(entity instanceof PlayerEntity)) return;
 
-        // Check shield — skip kalau target blocking
+        // Check shield
         if (checkShield && entity instanceof PlayerEntity player) {
             if (player.isBlocking()) return;
         }
 
-        // Item check — beda delay sword vs axe
+        // Item check
         var item = mc.player.getMainHandStack().getItem();
         boolean isSword = item instanceof SwordItem;
         boolean isAxe   = item instanceof AxeItem;
 
-        // Only crit checks — sama kayak Argon (cek fallDistance)
+        // Only crit checks
         if (onlyCritSword && isSword && mc.player.fallDistance <= 0.0f) return;
         if (onlyCritAxe   && isAxe   && mc.player.fallDistance <= 0.0f) return;
 
-        // Attack cooldown check
-        float cooldown = mc.player.getAttackCooldownProgress(0f);
-        if (cooldown < 1.0f) return;
+        // Attack cooldown — pakai 0.5F seperti Argon WorldUtils.isCrit()
+        // Lebih akurat dari 0f yang biasa dipakai
+        float cooldown = mc.player.getAttackCooldownProgress(0.5f);
+        if (cooldown < 0.9f) return;
 
-        // ATTACK!
+        // ATTACK
         mc.interactionManager.attackEntity(mc.player, entity);
-        if (swingHand) {
-            mc.player.swingHand(Hand.MAIN_HAND);
-        }
+        if (swingHand) mc.player.swingHand(Hand.MAIN_HAND);
 
-        // Update delay — random range tergantung item
+        // Reset delay — random range tergantung item
         lastAttackTime = now;
         if (isAxe) {
-            currentDelay = axeMinDelay
-                + (long)(Math.random() * (axeMaxDelay - axeMinDelay + 1));
+            currentDelay = axeMinDelay + (long)(Math.random() * (axeMaxDelay - axeMinDelay + 1));
         } else {
-            // Sword atau item lain pakai sword delay
-            currentDelay = swordMinDelay
-                + (long)(Math.random() * (swordMaxDelay - swordMinDelay + 1));
+            currentDelay = swordMinDelay + (long)(Math.random() * (swordMaxDelay - swordMinDelay + 1));
         }
     }
 
