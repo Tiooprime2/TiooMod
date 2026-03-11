@@ -1,21 +1,23 @@
 {
   "schemaVersion": 1,
-  "id": "tioomod",
-  "version": "1.0.0",
-  "name": "Tioo",
-  "description": "Lightweight combat mod by Tiooprime2",
-  "authors": ["Tiooprime2"],
-  "contact": {},
-  "license": "MIT",
+  "id": "immediatelyfast",
+  "version": "1.2.11+1.21.4",
+  "name": "ImmediatelyFast",
+  "description": "Speed up and optimize immediate mode rendering in Minecraft",
+  "authors": ["RK_01"],
+  "contact": {
+    "homepage": "https://modrinth.com/mod/immediatelyfast",
+    "sources": "https://github.com/RaphiMC/ImmediatelyFast"
+  },
+  "license": "LGPL-3.0",
+  "icon": "assets/immediatelyfast/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": ["net.tioo.mod.TiooMod"]
   },
   "mixins": ["tioo.mixins.json"],
   "depends": {
-    "fabricloader": ">=0.15.0",
-    "fabric-api": "*",
-    "minecraft": "~1.21.4",
-    "java": ">=21"
+    "fabricloader": ">=0.16.10",
+    "minecraft": "~1.21.4"
   }
 }
