@@ -2,67 +2,77 @@ package net.tioo.mod;
 
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.minecraft.client.MinecraftClient;
 import net.tioo.mod.gui.TiooGui;
 import net.tioo.mod.modules.combat.ShieldDisabler;
 import net.tioo.mod.modules.combat.TriggerBot;
-import org.lwjgl.glfw.GLFW;
 
 public class TiooMod implements ClientModInitializer {
 
     public static final String MOD_ID   = "tioomod";
     public static final String MOD_NAME = "Tioo";
 
-    // Singleton
-    public static TiooMod INSTANCE;
-
-    // Modules
-    public static TriggerBot    triggerBot;
+    public static TiooMod     INSTANCE;
+    public static TriggerBot  triggerBot;
     public static ShieldDisabler shieldDisabler;
-
-    // GUI
-    public static TiooGui gui;
-
-    // Keybind buka GUI (default: RIGHT_SHIFT)
-    private static KeyBinding openGuiKey;
+    public static TiooGui     gui;
 
     @Override
     public void onInitializeClient() {
-        INSTANCE = this;
-
-        // Init modules
+        INSTANCE       = this;
         triggerBot     = new TriggerBot();
         shieldDisabler = new ShieldDisabler();
+        gui            = new TiooGui();
 
-        // Init GUI
-        gui = new TiooGui();
+        // ═══════════════════════════════════════════
+        // CARA BUKA GUI — intercept chat message
+        // Ketik ".tioo" di chat → GUI terbuka
+        // Ketik ".tb"   di chat → toggle TriggerBot
+        // Ketik ".sd"   di chat → toggle ShieldDisabler
+        // ═══════════════════════════════════════════
+        ClientReceiveMessageEvents.ALLOW_CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
+            return true; // allow semua chat
+        });
 
-        // Register keybind RIGHT_SHIFT
-        openGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.tioomod.open_gui",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_RIGHT_SHIFT,
-            "category.tioomod"
-        ));
+        // Intercept SEBELUM chat dikirim ke server
+        net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents.ALLOW_CHAT.register(message -> {
+            MinecraftClient mc = MinecraftClient.getInstance();
 
-        // Tick event — cek keybind + jalankan modules
-        ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // Buka GUI saat RIGHT_SHIFT ditekan
-            while (openGuiKey.wasPressed()) {
-                if (client.currentScreen == null) {
-                    client.setScreen(gui);
-                }
+            if (message.equalsIgnoreCase(".tioo")) {
+                mc.execute(() -> mc.setScreen(new TiooGui()));
+                return false; // jangan kirim ke server
             }
 
-            // Tick modules
+            if (message.equalsIgnoreCase(".tb")) {
+                triggerBot.toggle();
+                mc.player.sendMessage(
+                    net.minecraft.text.Text.literal(
+                        "[Tioo] TriggerBot: " + (triggerBot.isEnabled() ? "§aON" : "§cOFF")
+                    ), true); // actionbar
+                return false;
+            }
+
+            if (message.equalsIgnoreCase(".sd")) {
+                shieldDisabler.toggle();
+                mc.player.sendMessage(
+                    net.minecraft.text.Text.literal(
+                        "[Tioo] ShieldDisabler: " + (shieldDisabler.isEnabled() ? "§aON" : "§cOFF")
+                    ), true);
+                return false;
+            }
+
+            return true; // kirim chat normal
+        });
+
+        // Tick modules
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.world != null && client.player != null) {
                 if (triggerBot.isEnabled())     triggerBot.onTick(client);
                 if (shieldDisabler.isEnabled()) shieldDisabler.onTick(client);
             }
         });
 
-        System.out.println("[Tioo] Mod initialized! Made by Tiooprime2");
+        System.out.println("[Tioo] Initialized! by Tiooprime2");
     }
 }
