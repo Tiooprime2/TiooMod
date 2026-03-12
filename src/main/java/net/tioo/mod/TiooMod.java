@@ -4,10 +4,12 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
 import net.tioo.mod.gui.TiooGui;
 import net.tioo.mod.modules.combat.ShieldDisabler;
 import net.tioo.mod.modules.combat.TriggerBot;
+import org.lwjgl.glfw.GLFW;
 
 public class TiooMod implements ClientModInitializer {
 
@@ -18,9 +20,8 @@ public class TiooMod implements ClientModInitializer {
     public static TriggerBot     triggerBot;
     public static ShieldDisabler shieldDisabler;
 
-    // Flag buat buka GUI di tick berikutnya
-    // (tidak bisa setScreen langsung dari chat event)
     private static boolean openGuiNextTick = false;
+    private boolean keyWasDown = false;
 
     @Override
     public void onInitializeClient() {
@@ -67,6 +68,22 @@ public class TiooMod implements ClientModInitializer {
         // Tick — jalankan modules + handle GUI open
         // ═══════════════════════════════════════════
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+
+            // ── RIGHT_SHIFT → buka/tutup GUI ──────────────────────────
+            if (client.getWindow() != null) {
+                boolean keyDown = InputUtil.isKeyPressed(
+                    client.getWindow().getHandle(),
+                    GLFW.GLFW_KEY_RIGHT_SHIFT
+                );
+                if (keyDown && !keyWasDown) {
+                    if (client.currentScreen == null) {
+                        openGuiNextTick = true;
+                    } else if (client.currentScreen instanceof TiooGui) {
+                        client.setScreen(null);
+                    }
+                }
+                keyWasDown = keyDown;
+            }
 
             // Buka GUI di sini (setelah chat event selesai)
             if (openGuiNextTick && client.currentScreen == null) {
