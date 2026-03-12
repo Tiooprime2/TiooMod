@@ -10,212 +10,349 @@ import net.tioo.mod.modules.Module;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * TiooGui — Fix sinkron klik vs visual
- *
- * Root cause:
- * Argon pakai unscaledProjection() → semua koordinat dalam framebuffer pixels
- * mouseX *= scaleFactor → sinkron dengan render
- *
- * Di 1.21.4 unscaledProjection tidak bisa dipakai
- * Fix: pakai MatrixStack.scale() untuk render dalam framebuffer space
- * Semua koordinat mouse juga di-scale sama
- */
 public class TiooGui extends Screen {
 
-    // Theme
-    private static final int C_BG     = col(10,  10,  16,  235);
-    private static final int C_HEADER = col(16,  16,  26,  255);
-    private static final int C_ACCENT = col(80,  140, 255, 255);
-    private static final int C_OFF    = col(22,  22,  35,  255);
-    private static final int C_ON     = col(20,  55,  25,  255);
-    private static final int C_BORDER = col(40,  40,  65,  255);
-    private static final int C_GREEN  = col(50,  210, 120, 255);
-    private static final int C_TEXT   = col(235, 235, 245, 255);
-    private static final int C_MUTED  = col(130, 130, 160, 255);
-    private static final int C_THUMB  = col(80,  140, 255, 200);
-    private static final int C_SCRBG  = col(40,  40,  60,  180);
+    // ── Colors ────────────────────────────────────────────────────────────
+    private static final int C_BG         = col(0,   0,   0,   224); // rgba(0,0,0,0.88)
+    private static final int C_HEADER_BG  = col(20,  20,  20,  245);
+    private static final int C_GREEN      = col(85,  255, 85,  255); // #55ff55
+    private static final int C_GREEN_DIM  = col(85,  255, 85,  13);  // bg tint aktif
+    private static final int C_WHITE      = col(255, 255, 255, 255);
+    private static final int C_GRAY       = col(204, 204, 204, 255); // #cccccc setting label
+    private static final int C_DARK_BG    = col(0,   0,   0,   77);  // settings bg
+    private static final int C_HOVER      = col(255, 255, 255, 10);
+    private static final int C_DIVIDER    = col(51,  51,  51,  255);
+    private static final int C_ROW_DIV    = col(255, 255, 255, 8);
+    // Checkbox
+    private static final int C_CB_BORDER  = col(102, 102, 102, 255); // unchecked border
+    private static final int C_CB_BG      = col(0,   0,   0,   128);
+    private static final int C_CB_ON      = col(255, 170, 0,   255); // orange checked
+    private static final int C_CB_ON_IN   = col(255, 248, 224, 255); // inner dot
+    // Slider
+    private static final int C_SL_TRACK   = col(51,  51,  51,  255);
+    private static final int C_SL_HANDLE  = col(255, 119, 204, 255); // pink
+    private static final int C_SL_VAL     = col(255, 119, 204, 255);
+    private static final int C_KEYBIND_BG = col(255, 255, 255, 18);
+    private static final int C_KEYBIND_BD = col(68,  68,  68,  255);
+    private static final int C_ARROW      = col(136, 136, 136, 255);
 
-    // Ukuran GUI dalam scaled GUI coords (sama seperti Minecraft normal)
-    private static final int WIN_W = 195;
-    private static final int WIN_H = 260;
-    private static final int HDR_H = 18;
-    private static final int BTN_H = 38;
-    private static final int PAD   = 4;
-    private static final int SUB_H = 15;
+    // ── Layout ────────────────────────────────────────────────────────────
+    private static final int WIN_W    = 200;
+    private static final int HDR_H    = 28;   // header Combat
+    private static final int MOD_H    = 22;   // tinggi module header row
+    private static final int ROW_H    = 20;   // tinggi setting row
+    private static final int SLD_H    = 34;   // tinggi slider row
+    private static final int PAD_L    = 10;   // left pad module
+    private static final int PAD_S    = 18;   // left pad setting
+    private static final int CB_SIZE  = 10;   // checkbox size
+    private static final int SL_H     = 3;    // slider track height
+    private static final int SL_TW    = 7;    // slider thumb width
+    private static final int SL_TH    = 13;   // slider thumb height
+    private static final int DOT      = 6;    // active dot size
 
-    // State
-    private int winX = 80, winY = 50;
-    private boolean drag; int dx, dy;
-    private double scrOff, scrVel;
-    private final List<Entry> entries = new ArrayList<>();
+    // ── State ─────────────────────────────────────────────────────────────
+    private int winX = 60, winY = 40;
+    private boolean dragging; int dragDX, dragDY;
+
+    // Slider drag state
+    private int dragSlider = -1; // index slider yang sedang di-drag
+    private int dragSliderStartX;
+
+    private final List<ModEntry> modules = new ArrayList<>();
+    private final List<SliderDef> sliders = new ArrayList<>();
+
+    // ── Data classes ──────────────────────────────────────────────────────
+    static class BoolSetting {
+        String label; boolean val;
+        BoolSetting(String l, boolean v) { label=l; val=v; }
+    }
+    static class SliderDef {
+        String label; float val; float min; float max; float spread;
+        boolean range; // true = tampil "min - max", false = tampil nilai saja
+        int guiY; // posisi Y saat render, diupdate tiap frame
+        SliderDef(String l, float v, float mn, float mx, float sp, boolean r) {
+            label=l; val=v; min=mn; max=mx; spread=sp; range=r;
+        }
+    }
+    static class ModEntry {
+        Module mod;
+        List<Object> settings = new ArrayList<>(); // BoolSetting atau SliderDef atau String(keybind)
+        boolean expanded;
+        ModEntry(Module m, boolean exp) { mod=m; expanded=exp; }
+    }
 
     public TiooGui() {
         super(Text.literal("Tioo"));
-        entries.add(new Entry(TiooMod.triggerBot,     buildTB()));
-        entries.add(new Entry(TiooMod.shieldDisabler, buildSD()));
+
+        // ── TriggerBot ────────────────────────────────────────────────────
+        ModEntry tb = new ModEntry(TiooMod.triggerBot, true);
+        tb.settings.add(new BoolSetting("Work In Screen",    false));
+        tb.settings.add(new BoolSetting("While Use",         false));
+        tb.settings.add(new BoolSetting("On Left Click",     false));
+        tb.settings.add(new BoolSetting("All Items",         false));
+        SliderDef swordSlider = new SliderDef("Sword Delay", 545, 0, 1000, 5, true);
+        SliderDef axeSlider   = new SliderDef("Axe Delay",   790, 0, 1000, 10, true);
+        tb.settings.add(swordSlider);
+        tb.settings.add(axeSlider);
+        sliders.add(swordSlider);
+        sliders.add(axeSlider);
+        tb.settings.add(new BoolSetting("Check Shield",      false));
+        tb.settings.add(new BoolSetting("While Ascending",   false));
+        tb.settings.add(new BoolSetting("Same Player",       false));
+        tb.settings.add(new BoolSetting("Only Crit Sword",   false));
+        tb.settings.add(new BoolSetting("Only Crit Axe",     false));
+        tb.settings.add(new BoolSetting("Swing Hand",        true));
+        tb.settings.add(new BoolSetting("Click Simulation",  false));
+        tb.settings.add(new BoolSetting("Stray Bypass",      false));
+        tb.settings.add(new BoolSetting("All Entities",      false));
+        tb.settings.add(new BoolSetting("Use Shield",        false));
+        SliderDef shieldTimeSlider = new SliderDef("Shield Time", 350, 100, 1000, 0, false);
+        tb.settings.add(shieldTimeSlider);
+        sliders.add(shieldTimeSlider);
+        tb.settings.add("BACKSLASH"); // keybind (String = keybind display)
+        modules.add(tb);
+
+        // ── ShieldDisabler ────────────────────────────────────────────────
+        ModEntry sd = new ModEntry(TiooMod.shieldDisabler, false);
+        sd.settings.add(new BoolSetting("Switch Back",       true));
+        sd.settings.add(new BoolSetting("Require Axe",       false));
+        sd.settings.add(new BoolSetting("Stun",              false));
+        sd.settings.add(new BoolSetting("Click Simulation",  false));
+        SliderDef hitSlider    = new SliderDef("Hit Delay",    0, 0, 20, 0, false);
+        SliderDef switchSlider = new SliderDef("Switch Delay", 0, 0, 20, 0, false);
+        sd.settings.add(hitSlider);
+        sd.settings.add(switchSlider);
+        sliders.add(hitSlider);
+        sliders.add(switchSlider);
+        modules.add(sd);
     }
 
-    private List<BS> buildTB() {
-        List<BS> s = new ArrayList<>();
-        s.add(new BS("All Entities",    TiooMod.triggerBot.isAllEntities(),    v -> TiooMod.triggerBot.setAllEntities(v)));
-        s.add(new BS("Swing Hand",      TiooMod.triggerBot.isSwingHand(),      v -> TiooMod.triggerBot.setSwingHand(v)));
-        s.add(new BS("Check Shield",    TiooMod.triggerBot.isCheckShield(),    v -> TiooMod.triggerBot.setCheckShield(v)));
-        s.add(new BS("Only Crit Sword", TiooMod.triggerBot.isOnlyCritSword(),  v -> TiooMod.triggerBot.setOnlyCritSword(v)));
-        s.add(new BS("Only Crit Axe",   TiooMod.triggerBot.isOnlyCritAxe(),   v -> TiooMod.triggerBot.setOnlyCritAxe(v)));
-        s.add(new BS("While Ascending", TiooMod.triggerBot.isWhileAscend(),    v -> TiooMod.triggerBot.setWhileAscend(v)));
-        return s;
-    }
-
-    private List<BS> buildSD() {
-        List<BS> s = new ArrayList<>();
-        s.add(new BS("Switch Back", TiooMod.shieldDisabler.isSwitchBack(),      v -> TiooMod.shieldDisabler.setSwitchBack(v)));
-        s.add(new BS("Require Axe", TiooMod.shieldDisabler.isRequireHoldAxe(), v -> TiooMod.shieldDisabler.setRequireHoldAxe(v)));
-        return s;
-    }
-
-    // ── Helper: ambil scaleFactor ──────────────────────────────────────────
-    private static float sf() {
-        return (float) MinecraftClient.getInstance().getWindow().getScaleFactor();
-    }
-
-    // ── Konversi mouse dari GUI coords ke "unscaled" coords ───────────────
-    // Argon: mouseX *= scaleFactor sebelum dipakai
-    // Kita: karena tidak pakai unscaledProjection, kita TIDAK perlu scale mouse
-    // GUI kita sudah render di GUI coords biasa — jadi mouse langsung cocok
-    // Yang perlu difix: posisi awal winX/winY harus dalam GUI coords
-
-    @Override
-    public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
-        // Scroll
-        scrOff += scrVel; scrVel *= 0.80;
-        if (Math.abs(scrVel) < 0.01) scrVel = 0;
-        int totH = totH(), visH = WIN_H - HDR_H;
-        scrOff = Math.max(0, Math.min(scrOff, Math.max(0, totH - visH)));
-
-        // Window BG + border + header
-        fill(ctx, winX, winY, winX+WIN_W, winY+WIN_H, C_BG);
-        border(ctx, winX, winY, WIN_W, WIN_H, C_BORDER);
-        fill(ctx, winX, winY, winX+WIN_W, winY+HDR_H, C_HEADER);
-        // Accent line di tengah header
-        fill(ctx, winX+WIN_W/4, winY, winX+WIN_W*3/4, winY+1, C_ACCENT);
-        ctx.drawText(textRenderer, "✦ Tioo", winX+6,        winY+5, C_TEXT,  false);
-        ctx.drawText(textRenderer, "v1.0",   winX+WIN_W-24, winY+5, C_MUTED, false);
-
-        // Clip render area bawah header
-        int clipY1 = winY + HDR_H;
-        int clipY2 = winY + WIN_H;
-
-        // Entries
-        int y = winY + HDR_H + PAD - (int)scrOff;
-        for (Entry e : entries) {
-            if (y + BTN_H > clipY1 && y < clipY2)
-                renderBtn(ctx, e, winX+PAD, y, mouseX, mouseY);
-            y += BTN_H + PAD;
-            if (e.exp) {
-                int sh = subH(e);
-                if (y > clipY1 && y < clipY2)
-                    renderSub(ctx, e, winX+PAD, y, mouseX, mouseY, clipY1, clipY2);
-                y += sh + PAD;
-            }
-        }
-
-        // Scrollbar
-        if (totH > visH) {
-            int sbx=winX+WIN_W-4, sby=clipY1, sbh=visH;
-            int th = Math.max(14, (int)(sbh*(float)visH/totH));
-            int ty = sby+(int)((sbh-th)*(float)(scrOff/Math.max(1,totH-visH)));
-            fill(ctx, sbx, sby, sbx+3, sby+sbh, C_SCRBG);
-            fill(ctx, sbx, ty,  sbx+3, ty+th,   C_THUMB);
-        }
-
-        super.render(ctx, mouseX, mouseY, delta);
-    }
-
-    private void renderBtn(DrawContext ctx, Entry e, int x, int y, int mx, int my) {
-        boolean on = e.mod.isEnabled();
-        int w = WIN_W - PAD*2;
-        fill(ctx, x, y, x+w, y+BTN_H, on ? C_ON : C_OFF);
-        border(ctx, x, y, w, BTN_H, on ? C_GREEN : C_BORDER);
-        // Accent strip kiri
-        fill(ctx, x, y+4, x+3, y+BTN_H-4, on ? C_GREEN : C_MUTED);
-        ctx.drawText(textRenderer, e.mod.getName(),        x+7, y+5,  C_TEXT,  false);
-        ctx.drawText(textRenderer, e.mod.getDescription(), x+7, y+16, C_MUTED, false);
-        // Badge ON/OFF
-        int bx=x+w-26, by=y+BTN_H/2-5;
-        fill(ctx, bx, by, bx+22, by+11, on ? col(20,60,25,200) : col(30,30,45,200));
-        ctx.drawText(textRenderer, on?"ON":"OFF", bx+2, by+2, on ? C_GREEN : C_MUTED, false);
-        // Arrow expand
-        ctx.drawText(textRenderer, e.exp?"▲":"▼", x+w-12, y+5, C_MUTED, false);
-    }
-
-    private void renderSub(DrawContext ctx, Entry e, int x, int y,
-                            int mx, int my, int clipY1, int clipY2) {
-        int w = WIN_W-PAD*2, h = subH(e);
-        fill(ctx, x, y, x+w, y+h, col(14,14,22,245));
-        border(ctx, x, y, w, h, C_BORDER);
-        int sy = y+2-(int)e.subScr;
-        for (BS s : e.settings) {
-            if (sy+SUB_H > y && sy < y+h && sy > clipY1 && sy < clipY2) {
-                if (mx>=x && mx<=x+w && my>=sy && my<=sy+SUB_H)
-                    fill(ctx, x, sy, x+w, sy+SUB_H, col(255,255,255,15));
-                ctx.drawText(textRenderer, s.label,           x+5,   sy+3, C_TEXT, false);
-                ctx.drawText(textRenderer, s.val ? "✓" : "✗", x+w-12, sy+3,
-                    s.val ? C_GREEN : col(200,70,70,255), false);
-            }
-            sy += SUB_H;
-        }
-    }
-
-    @Override
-    public boolean mouseScrolled(double mx, double my, double h, double v) {
-        int y = winY+HDR_H+PAD-(int)scrOff;
-        for (Entry e : entries) {
-            y += BTN_H+PAD;
-            if (e.exp) {
-                int sh = subH(e);
-                if (mx>=winX+PAD && mx<=winX+WIN_W-PAD && my>=y && my<=y+sh) {
-                    int rawH = e.settings.size()*SUB_H+4;
-                    if (rawH > 80) {
-                        scrVel = 0;
-                        e.subScr = Math.max(0, Math.min(e.subScr-v*6, rawH-80));
-                    }
-                    return true;
+    // ── Total height of window ────────────────────────────────────────────
+    private int totalH() {
+        int h = HDR_H;
+        for (ModEntry m : modules) {
+            h += MOD_H;
+            if (m.expanded) {
+                for (Object s : m.settings) {
+                    if (s instanceof SliderDef) h += SLD_H;
+                    else h += ROW_H;
                 }
-                y += sh+PAD;
             }
         }
-        if (mx>=winX && mx<=winX+WIN_W && my>=winY && my<=winY+WIN_H)
-            if (totH() > WIN_H-HDR_H) scrVel -= v*8;
-        return super.mouseScrolled(mx, my, h, v);
+        return h;
+    }
+
+    @Override
+    public void render(DrawContext ctx, int mx, int my, float delta) {
+        int winH = totalH();
+
+        // ── Window BG ─────────────────────────────────────────────────────
+        fill(ctx, winX, winY, winX+WIN_W, winY+winH, C_BG);
+        // Outline
+        fill(ctx, winX,          winY,          winX+WIN_W,   winY+1,     C_DIVIDER);
+        fill(ctx, winX,          winY+winH-1,   winX+WIN_W,   winY+winH,  C_DIVIDER);
+        fill(ctx, winX,          winY,          winX+1,        winY+winH,  C_DIVIDER);
+        fill(ctx, winX+WIN_W-1,  winY,          winX+WIN_W,   winY+winH,  C_DIVIDER);
+
+        // ── Header ────────────────────────────────────────────────────────
+        fill(ctx, winX, winY, winX+WIN_W, winY+HDR_H, C_HEADER_BG);
+        ctx.drawText(textRenderer, "Combat", winX+PAD_L, winY+8, C_WHITE, true);
+        // Green underline
+        fill(ctx, winX, winY+HDR_H-3, winX+WIN_W, winY+HDR_H, C_GREEN);
+
+        // ── Modules ───────────────────────────────────────────────────────
+        int curY = winY + HDR_H;
+
+        for (int mi = 0; mi < modules.size(); mi++) {
+            ModEntry m = modules.get(mi);
+            boolean on = m.mod.isEnabled();
+
+            // Active left border
+            if (on) {
+                fill(ctx, winX,   curY, winX+3, curY+MOD_H, C_GREEN);
+                fill(ctx, winX+3, curY, winX+WIN_W, curY+MOD_H, C_GREEN_DIM);
+            }
+
+            // Hover
+            if (mx>=winX && mx<=winX+WIN_W && my>=curY && my<=curY+MOD_H)
+                fill(ctx, winX, curY, winX+WIN_W, curY+MOD_H, C_HOVER);
+
+            // Active dot
+            int dotX = winX+PAD_L;
+            int dotY = curY + MOD_H/2 - DOT/2;
+            if (on) {
+                fill(ctx, dotX, dotY, dotX+DOT, dotY+DOT, C_GREEN);
+            } else {
+                // Outline dot
+                fill(ctx, dotX, dotY, dotX+DOT, dotY+1, C_CB_BORDER);
+                fill(ctx, dotX, dotY+DOT-1, dotX+DOT, dotY+DOT, C_CB_BORDER);
+                fill(ctx, dotX, dotY, dotX+1, dotY+DOT, C_CB_BORDER);
+                fill(ctx, dotX+DOT-1, dotY, dotX+DOT, dotY+DOT, C_CB_BORDER);
+            }
+
+            // Module name
+            ctx.drawText(textRenderer, m.mod.getName(), winX+PAD_L+DOT+5, curY+7, C_WHITE, true);
+
+            // Arrow
+            String arrow = m.expanded ? "v" : ">";
+            ctx.drawText(textRenderer, arrow, winX+WIN_W-14, curY+7, C_ARROW, false);
+
+            curY += MOD_H;
+
+            // Divider antara module header dan settings
+            if (!m.expanded && mi < modules.size()-1) {
+                fill(ctx, winX+8, curY-1, winX+WIN_W-8, curY, C_DIVIDER);
+            }
+
+            // ── Settings ──────────────────────────────────────────────────
+            if (m.expanded) {
+                fill(ctx, winX, curY, winX+WIN_W, curY + settingsH(m), C_DARK_BG);
+
+                for (Object s : m.settings) {
+                    if (s instanceof BoolSetting bs) {
+                        // Row hover
+                        if (mx>=winX && mx<=winX+WIN_W && my>=curY && my<=curY+ROW_H)
+                            fill(ctx, winX, curY, winX+WIN_W, curY+ROW_H, C_HOVER);
+
+                        // Label
+                        ctx.drawText(textRenderer, bs.label, winX+PAD_S, curY+6, C_GRAY, false);
+
+                        // Checkbox
+                        int cbX = winX+WIN_W-PAD_S-CB_SIZE;
+                        int cbY = curY + ROW_H/2 - CB_SIZE/2;
+                        if (bs.val) {
+                            fill(ctx, cbX, cbY, cbX+CB_SIZE, cbY+CB_SIZE, C_CB_ON);
+                            // Inner dot
+                            int id = 3;
+                            fill(ctx, cbX+id, cbY+id, cbX+CB_SIZE-id, cbY+CB_SIZE-id, C_CB_ON_IN);
+                        } else {
+                            fill(ctx, cbX, cbY, cbX+CB_SIZE, cbY+CB_SIZE, C_CB_BG);
+                            // Border
+                            fill(ctx, cbX, cbY, cbX+CB_SIZE, cbY+1, C_CB_BORDER);
+                            fill(ctx, cbX, cbY+CB_SIZE-1, cbX+CB_SIZE, cbY+CB_SIZE, C_CB_BORDER);
+                            fill(ctx, cbX, cbY, cbX+1, cbY+CB_SIZE, C_CB_BORDER);
+                            fill(ctx, cbX+CB_SIZE-1, cbY, cbX+CB_SIZE, cbY+CB_SIZE, C_CB_BORDER);
+                        }
+                        // Row divider
+                        fill(ctx, winX, curY+ROW_H-1, winX+WIN_W, curY+ROW_H, C_ROW_DIV);
+                        curY += ROW_H;
+
+                    } else if (s instanceof SliderDef sd) {
+                        sd.guiY = curY; // simpan Y untuk drag
+
+                        // Label
+                        ctx.drawText(textRenderer, sd.label, winX+PAD_S, curY+5, C_GRAY, false);
+
+                        // Value text
+                        String valStr;
+                        if (sd.range) {
+                            valStr = String.format("%.0f-%.0f", sd.val - sd.spread/2, sd.val + sd.spread/2);
+                        } else {
+                            valStr = String.format("%.0f", sd.val);
+                        }
+                        int vw = textRenderer.getWidth(valStr);
+                        ctx.drawText(textRenderer, valStr, winX+WIN_W-PAD_S-vw, curY+5, C_SL_VAL, false);
+
+                        // Track
+                        int tX1 = winX+PAD_S;
+                        int tX2 = winX+WIN_W-PAD_S;
+                        int tY  = curY + SLD_H/2 + 4;
+                        fill(ctx, tX1, tY, tX2, tY+SL_H, C_SL_TRACK);
+
+                        // Thumb
+                        float ratio = (sd.val - sd.min) / (sd.max - sd.min);
+                        int tPos = tX1 + (int)(ratio * (tX2 - tX1 - SL_TW));
+                        fill(ctx, tPos, tY - (SL_TH-SL_H)/2, tPos+SL_TW, tY + SL_H + (SL_TH-SL_H)/2, C_SL_HANDLE);
+
+                        // Row divider
+                        fill(ctx, winX, curY+SLD_H-1, winX+WIN_W, curY+SLD_H, C_ROW_DIV);
+                        curY += SLD_H;
+
+                    } else if (s instanceof String keybind) {
+                        // Keybind row
+                        ctx.drawText(textRenderer, "Keybind", winX+PAD_S, curY+6, C_GRAY, false);
+                        int kbw = textRenderer.getWidth(keybind);
+                        fill(ctx, winX+WIN_W-PAD_S-kbw-6, curY+4, winX+WIN_W-PAD_S+4, curY+ROW_H-4, C_KEYBIND_BG);
+                        // border
+                        int kbX1 = winX+WIN_W-PAD_S-kbw-6;
+                        int kbY1 = curY+4;
+                        int kbX2 = winX+WIN_W-PAD_S+4;
+                        int kbY2 = curY+ROW_H-4;
+                        fill(ctx, kbX1, kbY1, kbX2, kbY1+1, C_KEYBIND_BD);
+                        fill(ctx, kbX1, kbY2-1, kbX2, kbY2, C_KEYBIND_BD);
+                        fill(ctx, kbX1, kbY1, kbX1+1, kbY2, C_KEYBIND_BD);
+                        fill(ctx, kbX2-1, kbY1, kbX2, kbY2, C_KEYBIND_BD);
+                        ctx.drawText(textRenderer, keybind, winX+WIN_W-PAD_S-kbw-2, curY+6, C_ARROW, false);
+                        fill(ctx, winX, curY+ROW_H-1, winX+WIN_W, curY+ROW_H, C_ROW_DIV);
+                        curY += ROW_H;
+                    }
+                }
+
+                // Divider antara module
+                if (mi < modules.size()-1)
+                    fill(ctx, winX+8, curY, winX+WIN_W-8, curY+1, C_DIVIDER);
+            }
+        }
+
+        super.render(ctx, mx, my, delta);
+    }
+
+    private int settingsH(ModEntry m) {
+        int h = 0;
+        for (Object s : m.settings) h += (s instanceof SliderDef) ? SLD_H : ROW_H;
+        return h;
     }
 
     @Override
     public boolean mouseClicked(double mx, double my, int btn) {
-        // Header drag
+        int curY = winY + HDR_H;
+
+        // Drag window header
         if (mx>=winX && mx<=winX+WIN_W && my>=winY && my<=winY+HDR_H) {
-            drag=true; dx=(int)(mx-winX); dy=(int)(my-winY); return true;
+            dragging=true; dragDX=(int)(mx-winX); dragDY=(int)(my-winY); return true;
         }
-        int y = winY+HDR_H+PAD-(int)scrOff;
-        for (Entry e : entries) {
-            int x=winX+PAD, w=WIN_W-PAD*2;
-            // Klik tombol module
-            if (mx>=x && mx<=x+w && my>=y && my<=y+BTN_H) {
-                if (btn==0) e.mod.toggle();
-                else if (btn==1) { e.exp=!e.exp; e.subScr=0; }
+
+        for (ModEntry m : modules) {
+            // Klik module header
+            if (mx>=winX && mx<=winX+WIN_W && my>=curY && my<=curY+MOD_H) {
+                if (btn==0) m.expanded = !m.expanded;
+                if (btn==1) m.mod.toggle();
                 return true;
             }
-            y += BTN_H+PAD;
-            if (e.exp) {
-                // Klik setting
-                int sy = y-(int)e.subScr;
-                for (BS s : e.settings) {
-                    if (mx>=x+4 && mx<=x+w-4 && my>=sy && my<=sy+SUB_H) {
-                        s.val=!s.val; s.onChange.accept(s.val); return true;
+            curY += MOD_H;
+
+            if (m.expanded) {
+                for (Object s : m.settings) {
+                    int rowH = (s instanceof SliderDef) ? SLD_H : ROW_H;
+
+                    if (s instanceof BoolSetting bs) {
+                        // Klik checkbox
+                        int cbX = winX+WIN_W-PAD_S-CB_SIZE;
+                        int cbY = curY + ROW_H/2 - CB_SIZE/2;
+                        if (mx>=cbX-4 && mx<=cbX+CB_SIZE+4 && my>=cbY-4 && my<=cbY+CB_SIZE+4) {
+                            bs.val = !bs.val;
+                            return true;
+                        }
+                        // Klik row juga toggle
+                        if (mx>=winX && mx<=winX+WIN_W && my>=curY && my<=curY+ROW_H) {
+                            bs.val = !bs.val;
+                            return true;
+                        }
+                    } else if (s instanceof SliderDef sd) {
+                        // Klik slider track — mulai drag
+                        int tX1 = winX+PAD_S;
+                        int tX2 = winX+WIN_W-PAD_S;
+                        int tY  = curY + SLD_H/2 + 4;
+                        if (mx>=tX1 && mx<=tX2 && my>=tY-8 && my<=tY+8) {
+                            float ratio = (float)((mx - tX1) / (tX2 - tX1));
+                            sd.val = sd.min + ratio * (sd.max - sd.min);
+                            sd.val = Math.max(sd.min, Math.min(sd.max, sd.val));
+                            dragSlider = sliders.indexOf(sd);
+                            return true;
+                        }
                     }
-                    sy += SUB_H;
+                    curY += rowH;
                 }
-                y += subH(e)+PAD;
             }
         }
         return super.mouseClicked(mx, my, btn);
@@ -223,40 +360,38 @@ public class TiooGui extends Screen {
 
     @Override
     public boolean mouseDragged(double mx, double my, int btn, double ddx, double ddy) {
-        if (drag) { winX=(int)(mx-dx); winY=(int)(my-dy); return true; }
+        if (dragging) {
+            winX = (int)(mx - dragDX);
+            winY = (int)(my - dragDY);
+            return true;
+        }
+        if (dragSlider >= 0 && dragSlider < sliders.size()) {
+            SliderDef sd = sliders.get(dragSlider);
+            int tX1 = winX+PAD_S;
+            int tX2 = winX+WIN_W-PAD_S;
+            float ratio = (float)((mx - tX1) / (tX2 - tX1));
+            sd.val = sd.min + ratio * (sd.max - sd.min);
+            sd.val = Math.max(sd.min, Math.min(sd.max, sd.val));
+            return true;
+        }
         return super.mouseDragged(mx, my, btn, ddx, ddy);
     }
 
     @Override
     public boolean mouseReleased(double mx, double my, int btn) {
-        drag=false; return super.mouseReleased(mx, my, btn);
+        dragging = false;
+        dragSlider = -1;
+        return super.mouseReleased(mx, my, btn);
     }
 
     @Override public boolean shouldPause()      { return false; }
-    @Override public boolean shouldCloseOnEsc() { return true;  }
+    @Override public boolean shouldCloseOnEsc() { return true; }
 
-    private int totH() {
-        int t=0;
-        for (Entry e : entries) { t+=BTN_H+PAD; if(e.exp) t+=subH(e)+PAD; }
-        return t;
+    private void fill(DrawContext c, int x1, int y1, int x2, int y2, int color) {
+        if (x2 > x1 && y2 > y1) c.fill(x1, y1, x2, y2, color);
     }
-    private int subH(Entry e) { return Math.min(e.settings.size()*SUB_H+4, 80); }
 
-    private void fill(DrawContext c,int x1,int y1,int x2,int y2,int color) {
-        if (x2>x1 && y2>y1) c.fill(x1,y1,x2,y2,color);
-    }
-    private void border(DrawContext c,int x,int y,int w,int h,int col) {
-        c.fill(x,y,x+w,y+1,col); c.fill(x,y+h-1,x+w,y+h,col);
-        c.fill(x,y,x+1,y+h,col); c.fill(x+w-1,y,x+w,y+h,col);
-    }
-    private static int col(int r,int g,int b,int a) { return (a<<24)|(r<<16)|(g<<8)|b; }
-
-    private static class Entry {
-        Module mod; List<BS> settings; boolean exp; double subScr;
-        Entry(Module m, List<BS> s) { mod=m; settings=s; }
-    }
-    private static class BS {
-        String label; boolean val; java.util.function.Consumer<Boolean> onChange;
-        BS(String l, boolean v, java.util.function.Consumer<Boolean> c) { label=l; val=v; onChange=c; }
+    private static int col(int r, int g, int b, int a) {
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 }
